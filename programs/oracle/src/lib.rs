@@ -1,6 +1,7 @@
 use anchor_lang::{AccountsClose, prelude::*};
 use anchor_lang::prelude::*;
 use anchor_spl::token::*;
+use borsh::{BorshSerialize, BorshDeserialize};
 use anchor_spl::token::{
     Burn,
     Token,
@@ -77,11 +78,30 @@ pub mod oracle {
             if config.protocol_list[i] == 1 {
                 let raydium_price = raydium_clmm_spot_price(&accounts[index]);
                 msg!("Price in raydium CLMM = {}", raydium_price);
+                index += 1;
                 price_sum += raydium_price;
             }
         }
 
         msg!("Price = {}", price_sum / config.num_of_pools as u128);
+
+        if index < accounts.len() {
+            let mut price_container = &accounts[index];
+            let data = &mut price_container.try_borrow_mut_data().expect("Failed to borrow data");
+            let mut price = PriceContainer::try_from_slice(&data[8..]).expect("Failed to deserialize");
+
+            price.price = price_sum / config.num_of_pools as u128;
+
+            let serialized_data = price.try_to_vec().expect("Failed to serialize");
+
+            if serialized_data.len() > data.len() {
+                panic!("Serialized data is too large for the account data buffer.");
+            }
+
+            for (i, byte) in serialized_data.iter().enumerate() {
+                data[i] = *byte;
+            }
+        }
 
         Ok(())
     }
@@ -110,6 +130,13 @@ pub mod oracle {
         let whirlpool = &mut ctx.accounts.whirlpool.load_mut()?;
         raydium_clmm.sqrt_price_x64 = price_clmm;
         whirlpool.sqrt_price = price_whirlpool;
+        Ok(())
+    }
+
+    pub fn create_price_container(
+        ctx: Context<CreatePriceContainer>,
+    ) -> Result<()> {
+        let mut price_container = &mut ctx.accounts.price_container.load_init()?;
         Ok(())
     }
 
@@ -154,6 +181,12 @@ pub struct CreateRaydiumClmmAndWhirlpool<'info> {
 }
 
 #[derive(Accounts)]
+pub struct CreatePriceContainer<'info> {
+    #[account(zero)]
+    pub price_container: AccountLoader<'info, PriceContainer>,
+}
+
+#[derive(Accounts)]
 pub struct SimulatePriceInClmmAndWhirlpool<'info> {
     #[account(mut)]
     pub signer: Signer<'info>,
@@ -193,4 +226,10 @@ pub struct PoolData {                   // 193 bytes
     pub pool_account: Pubkey,           // 32bytes
     pub num_of_dependencies: u8,        // 1 byte
     pub pool_dependencies: [Pubkey; 5], // 160 bytes
+}
+
+#[account(zero_copy)]
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct PriceContainer {
+    pub price: u128
 }
